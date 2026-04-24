@@ -6,6 +6,8 @@ on:
     paths:
       - 'solidity-auditor/**'
       - '!solidity-auditor/VERSION'
+      - 'x-ray/**'
+      - '!x-ray/VERSION'
 
 jobs:
   bump:
@@ -15,18 +17,35 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Bump version
+      - name: Detect changed skill and bump version
         run: |
-          CURRENT=$(cat solidity-auditor/VERSION | tr -d '[:space:]')
-          NEW=$((CURRENT + 1))
-          echo "$NEW" > solidity-auditor/VERSION
-          echo "Version bump: ${CURRENT} -> ${NEW}"
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+          BUMPED=""
+
+          if echo "$CHANGED_FILES" | grep -q '^solidity-auditor/' && ! echo "$CHANGED_FILES" | grep -qx 'solidity-auditor/VERSION'; then
+            CURRENT=$(cat solidity-auditor/VERSION | tr -d '[:space:]')
+            NEW=$((CURRENT + 1))
+            echo "$NEW" > solidity-auditor/VERSION
+            echo "solidity-auditor: ${CURRENT} -> ${NEW}"
+            BUMPED="$BUMPED solidity-auditor"
+          fi
+
+          if echo "$CHANGED_FILES" | grep -q '^x-ray/' && ! echo "$CHANGED_FILES" | grep -qx 'x-ray/VERSION'; then
+            CURRENT=$(cat x-ray/VERSION | tr -d '[:space:]')
+            NEW=$((CURRENT + 1))
+            echo "$NEW" > x-ray/VERSION
+            echo "x-ray: ${CURRENT} -> ${NEW}"
+            BUMPED="$BUMPED x-ray"
+          fi
+
+          echo "BUMPED=$BUMPED" >> $GITHUB_ENV
 
       - name: Commit and push
+        if: env.BUMPED != ''
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add solidity-auditor/VERSION
+          git add solidity-auditor/VERSION x-ray/VERSION
           git diff --cached --quiet && exit 0
-          git commit -m "bump(solidity-auditor): $(cat solidity-auditor/VERSION)"
+          git commit -m "bump:${{ env.BUMPED }}"
           git push
