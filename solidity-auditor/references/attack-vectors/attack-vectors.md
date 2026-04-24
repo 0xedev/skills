@@ -1335,3 +1335,103 @@
 
 - **D:** Contract implements `onERC1155Received` but not `onERC1155BatchReceived` (or returns wrong selector). `safeBatchTransferFrom` reverts, blocking batch settlement/distribution.
 - **FP:** Both callbacks implemented correctly, or inherits OZ `ERC1155Holder`. Protocol exclusively uses single-item `safeTransferFrom`.
+
+**267. L2 Sequencer Downtime Enables Stale Liquidations**
+
+- **D:** On Optimistic/ZK rollups, sequencer downtime freezes on-chain state while off-chain markets move. When sequencer resumes, positions that became unhealthy during downtime are immediately liquidated at stale prices, potentially unfairly. Protocol doesn't check Chainlink's L2 Sequencer Uptime Feed or implement a grace period post-restart.
+- **FP:** Checks `sequencerUptimeFeed.latestRoundData()` and enforces `GRACE_PERIOD_TIME` after sequencer restart before allowing liquidations. Dedicated `isSequencerUp()` function gates all price-sensitive operations.
+
+**268. Transient Storage (EIP-1153) Reentrancy Guard Bypass**
+
+- **D:** Protocol uses `tstore`/`tload` for reentrancy locks (cheaper than `sstore`/`sload`). But transient storage is cleared between top-level calls in the same transaction. If the reentrancy entry point uses `CALL` (new execution context) rather than `DELEGATECALL`, the transient lock is reset and the guard is bypassed. Pattern: callback from external contract re-enters through a fresh `CALL`.
+- **FP:** Lock is in storage (not transient), or the transient lock correctly covers the entire call frame including callbacks. `nonReentrant` from OZ >= 5.1 which handles transient storage correctly.
+
+**269. EIP-4844 Blob Data Unavailability After Pruning**
+
+- **D:** Protocol relies on blob data (type-3 transactions) being accessible on-chain. After the blob pruning window (~18 days on mainnet), blob data becomes unavailable. Contracts that verify blob commitments or reconstruct state from blob data fail permanently after pruning. Pattern: `blobhash(index)` returns 0 after pruning, `DATAHASH` opcode returns stale commitments.
+- **FP:** Protocol stores a permanent on-chain copy of critical blob data. Uses blob data only for temporary data availability during challenge windows that expire well before pruning. Blob data is replicated to permanent DA layer.
+
+**270. Cross-L2 Bridge Message Replay via Shared Nonce Space**
+
+- **D:** Bridge contract uses a nonce counter per chain pair but doesn't scope nonces to message type. An attacker replays a `deposit` message nonce as a `governance` message nonce (or vice versa), executing unauthorized cross-chain actions. Pattern: single `nonce++` shared across deposit, withdraw, and governance message types.
+- **FP:** Nonce is scoped per `(srcChain, dstChain, messageType)` tuple. Message type is included in the hash/signature. EIP-712 typed structured data with explicit type discriminator.
+
+**271. Permit2 AllowanceTransfer Griefing via Front-Run**
+
+- **D:** User signs a Permit2 `AllowanceTransfer` with specific `amount` and `nonce`. Attacker front-runs with a `permit` call using the same signature (signatures are public in the mempool), consuming the nonce. User's actual `transferFrom` call then fails because the permit was already used. Repeatable indefinitely to DoS specific users.
+- **FP:** Protocol uses `SignatureTransfer` (single-use, nonce-based) instead of `AllowanceTransfer`. `permit` and `transferFrom` are atomic in the same transaction. User uses private mempool (Flashbots).
+
+**272. ERC-4337 Account Abstraction Validation Phase Manipulation**
+
+- **D:** Smart account's `validateUserOp` reads on-chain state (e.g., oracle price, governance token balance) to make validation decisions. An attacker manipulates that state between the bundler's simulation and actual block inclusion. The UserOp that was valid during simulation reverts on-chain, or vice versa — a UserOp that should revert passes with manipulated state.
+- **FP:** `validateUserOp` uses only immutable/constant values and the UserOp's own fields. Bundler uses `eth_sendBundle` with state-lock guarantees. Storage access restrictions per ERC-4337 spec enforced by the EntryPoint.
+
+**273. Restaking Slashing Cascade Across AVSs**
+
+- **D:** Restaked ETH/LST is shared across multiple Actively Validated Services (AVSs). A slashing event in one AVS reduces the operator's stake across ALL AVSs, potentially triggering cascading slashing if the reduced stake falls below other AVSs' minimum requirements. Protocol doesn't account for correlated slashing exposure. Pattern: `operatorStake[operator]` is a single value shared across AVS registrations.
+- **FP:** Slashing is isolated per AVS with separate escrowed stakes. Protocol enforces maximum AVS registration count. Slashing calculations account for pending slashing from other AVSs. Cooldown period between slashing events prevents cascading.
+
+**274. Hook Re-entrancy in Uniswap V4 / Custom AMM Hooks**
+
+- **D:** Custom pool hooks (`beforeSwap`, `afterSwap`, `beforeModifyPosition`, etc.) execute arbitrary code during pool operations. A malicious hook re-enters the pool manager or other pools during a hook callback, manipulating prices or liquidity mid-operation. Pattern: hook reads pool state that is mid-update (transient inconsistency).
+- **FP:** Pool manager uses transient storage locks. Hooks are whitelisted and audited. Hook execution is sandboxed with limited gas. State is finalized before hook callbacks via checks-effects-interactions.
+
+**275. EIP-7702 Delegation Revocation Race**
+
+- **D:** EOA delegates to Contract A via EIP-7702. A transaction from Contract A is in the mempool. EOA revokes delegation (re-delegates to a different contract or revokes entirely) in a front-running transaction. The pending transaction now executes against the wrong delegation target or bare EOA, potentially with unexpected behavior. Pattern: delegation state changes between tx submission and execution.
+- **FP:** Critical operations verify delegation target at execution time (not just at submission). Transactions include delegation target address in calldata for runtime verification.
+
+**276. Blob Base Fee Manipulation for L2 Cost Attacks**
+
+- **D:** L2 bridges/rollups that post data via blobs (EIP-4844) calculate fees based on blob base fee. An attacker spams blob transactions to spike the blob base fee, making L2 batch posting prohibitively expensive. This delays batch finality, potentially enabling double-spend or challenge-period exploits on optimistic rollups.
+- **FP:** L2 has blob fee smoothing/buffering. Fee spikes are absorbed by the sequencer with rate-limiting. Protocol falls back to calldata posting when blob fees are excessive.
+
+**277. Governance Token Snapshot Manipulation via Flash Delegation**
+
+- **D:** Governance uses voting power snapshots at proposal creation block. Attacker borrows governance tokens via flash loan in the same block as proposal creation, delegates to self, and captures a large voting power snapshot. Tokens are returned but the snapshot persists. Pattern: `_delegate()` updates checkpoint in same block, `getPastVotes(account, blockNumber)` reads that checkpoint.
+- **FP:** Snapshot is taken at `proposalSnapshot = block.number - 1` (previous block, immune to same-block manipulation). Delegation changes have a warmup period. Flash loan guard on delegation.
+
+**278. Intent-Based Protocol Solver Collusion**
+
+- **D:** Intent/order-flow protocols (CoW Swap style) rely on competitive solvers. If solvers collude, they can systematically extract value from users by filling orders at worse-than-optimal prices while appearing competitive. Pattern: no on-chain enforcement of price optimality, solver reputation is off-chain only.
+- **FP:** On-chain price verification against oracle or reference price. Minimum improvement over baseline price enforced in contract. Competition among permissionless solvers with slashing for bad fills.
+
+**279. Merkle Tree Depth Mismatch in Airdrop/Whitelist Contracts**
+
+- **D:** Contract uses `MerkleProof.verify()` but doesn't enforce the expected tree depth. An attacker provides a proof of unexpected length that collides with an intermediate node hash, claiming a leaf they're not entitled to. Pattern: variable-length proofs accepted without depth check for a fixed-depth tree.
+- **FP:** Tree depth is fixed and verified: `require(proof.length == EXPECTED_DEPTH)`. Leaves use domain separation (double-hashing or type prefix). OZ `MerkleProof` with multiProof variant.
+
+**280. Cross-Chain Token Standard Mismatch (OFT vs Lock-and-Mint)**
+
+- **D:** Token uses OFT (burn-on-source, mint-on-dest) on some chains and lock-and-mint on others, creating a total supply mismatch. If bridge accounting fails, tokens can be created on the OFT chain without corresponding locks, inflating total supply. Pattern: mixed bridge mechanisms for the same token across chains.
+- **FP:** Single bridge mechanism used consistently. Total supply accounting reconciled across all chains via canonical registry. Rate-limiting on mint to prevent supply explosion.
+
+**281. ERC-7579 Module Execution Forgery**
+
+- **D:** Modular smart account (ERC-7579) installs an execution module that has broader permissions than intended. Module calls `execute()` on the account with arbitrary calldata, performing actions the user never authorized. Pattern: module has `onInstall` that stores the account address, later calls `account.execute(target, value, data)` with attacker-chosen parameters.
+- **FP:** Modules are scoped to specific function selectors or target addresses. Execution requires user signature per-call. Module permissions are granular (validator vs executor vs hook).
+
+**282. Low-Liquidity Token Oracle Manipulation via Concentrated Liquidity**
+
+- **D:** Protocol uses a Uniswap V3/V4 TWAP oracle for a token with low liquidity. Attacker provides concentrated liquidity at an extreme tick, then swaps to move price to that tick. Even with TWAP, short observation windows (< 30 min) can be moved significantly with modest capital on low-liquidity pairs.
+- **FP:** TWAP window is sufficiently long (>= 30 min). Oracle uses median of multiple sources. Liquidity depth check: `require(pool.liquidity() > MIN_LIQUIDITY)`. Fallback oracle for low-liquidity conditions.
+
+**283. Eigenvalue Inflation in Points/Restaking Systems**
+
+- **D:** Points/rewards system uses a multiplier based on duration or loyalty tier. Attacker deposits, earns multiplier status, withdraws to a second address, re-deposits to earn base rewards PLUS the residual multiplier. The multiplier checkpoint persists after withdrawal. Pattern: `multiplier[user]` is not reset on full withdrawal.
+- **FP:** Multiplier resets to 1x on any withdrawal. Multiplier is a function of continuous staking duration (recalculated at query time, not stored as state). Transfer of staked position resets the multiplier.
+
+**284. Blob Carrying Transaction Censorship Resistance Failure**
+
+- **D:** On L2s posting blob data, a censoring proposer/sequencer can selectively exclude blob-carrying transactions because blob transactions are distinguishable (type-3 envelope). This enables targeted censorship of specific bridge deposits or data availability posts.
+- **FP:** Protocol uses forced inclusion via L1 deposit contract. Based rollup design with no sequencer censorship. Multiple independent blob submitters with redundancy.
+
+**285. Rounding Direction Inconsistency in ERC-4626 Vault Share Accounting**
+
+- **D:** Vault's `convertToShares()` rounds DOWN (correct for deposits) but `previewRedeem()` uses the same rounding, overestimating assets returned. Or `convertToAssets()` rounds UP for `previewWithdraw()`, allowing withdrawal of more assets than entitled. The inconsistency between preview and actual execution functions enables extraction. Pattern: single rounding function used for both deposit and withdrawal directions.
+- **FP:** `_convertToShares(assets, Math.Rounding.Down)` for deposits, `_convertToShares(assets, Math.Rounding.Up)` for withdrawals. OZ ERC4626 with explicit rounding parameter. Preview functions and execution functions use identical rounding.
+
+**286. Multi-Collateral Position Partial Liquidation Cherry-Picking**
+
+- **D:** Position has multiple collateral types. Liquidator can choose which collateral to seize, always picking the most valuable or most liquid one. After partial liquidation, the remaining position has only illiquid/low-value collateral, making further liquidation unprofitable. Bad debt accrues from the residual position.
+- **FP:** Liquidator must seize proportionally across all collateral types. Post-liquidation health factor check ensures remaining position is viable. Single collateral type per position.

@@ -60,3 +60,37 @@ echo "All benchmarks complete."
 ```
 
 After all complete, for each `{run_dir}`: read `evals/compare.md`, compare `{run_dir}/ground-truth.md` against `{run_dir}/final-report.md`, write `summary.md` to `{run_dir}/`. Print each summary and `=== All done. {count} benchmarks. ===`
+
+## Aggregate Report
+
+After all individual summaries are written, produce `evals/results/aggregate-{timestamp}-{commit}.md`:
+
+```markdown
+# Aggregate Eval — {timestamp} ({commit})
+
+## Overall Metrics
+
+| Metric | PoolTogether | DODO | Megapot | **Total** |
+|--------|-------------|------|---------|-----------|
+| Recall | X/Y (Z%) | ... | ... | **X/Y (Z%)** |
+| Precision | ... | ... | ... | **...** |
+| F1 | ... | ... | ... | **...** |
+| FP count | ... | ... | ... | **...** |
+| PoCs proven | ... | ... | ... | **...** |
+
+## Per-Category Aggregate
+
+| Category | Found | Lead | Missed | Total | Recall |
+|----------|-------|------|--------|-------|--------|
+| ... | ... | ... | ... | ... | ...% |
+
+## Weakest Categories (bottom 3 by recall)
+1. [category] — [recall]% — [pattern of misses]
+2. ...
+3. ...
+
+## Regressions vs Previous Run
+[If a previous aggregate exists, diff the metrics]
+```
+
+This aggregate tells you at a glance: where the skill is strong, where it's weak, and whether changes improved or regressed performance.

@@ -40,8 +40,8 @@ mkdir -p [project-root]/x-ray && bash $SKILL_DIR/scripts/enumerate.sh [project-r
 
 **0. Version check** (foreground):
 - Read the local `VERSION` file from `$SKILL_DIR/VERSION`
-- Bash `curl -sf https://raw.githubusercontent.com/pashov/skills/main/x-ray/VERSION`
-- If the remote VERSION fetch succeeds and differs from local, print `⚠️ You are not using the latest version. Please upgrade for best security coverage. See https://github.com/pashov/skills`. If it fails, skip silently.
+- Bash `curl -sf https://raw.githubusercontent.com/0xedev/skills/main/x-ray/VERSION`
+- If the remote VERSION fetch succeeds and differs from local, print `⚠️ You are not using the latest version. Please upgrade for best security coverage. See https://github.com/0xedev/skills`. If it fails, skip silently.
 
 **1. Coverage** (`run_in_background: true`):
 
@@ -67,6 +67,41 @@ The JSON has 7 sections: `repo_shape`, `fix_candidates`, `dangerous_area_changes
 **3. Preload reference files** (2 parallel Read calls — these must be in context before Step 2d/3a):
 - `$SKILL_DIR/references/threats.md` — threat profiles, temporal threats, composability threats
 - `$SKILL_DIR/references/templates.md` — output template, entry points template, architecture guide
+**5. Static analysis pre-pass** (foreground, if Slither available):
+```bash
+cd [project-root] && slither . --json x-ray/slither-output.json 2>/dev/null && echo "SLITHER_OK" || echo "SLITHER_SKIP"
+```
+
+If Slither produces output, extract and store for Step 2 consumption:
+- **Call graph**: which functions call which, across contracts
+- **State variable access map**: readers/writers per storage variable
+- **Inheritance DAG**: contract inheritance relationships
+- **External call sites**: every `.call`, `.delegatecall`, `.staticcall`, and interface call with target + line number
+- **Detector findings**: high/medium severity only — feed into threat model as corroborating evidence
+
+Format the extraction as `x-ray/static-analysis.md` and read it into context for Step 2. If Slither is not installed, skip silently — the X-Ray operates fully without it, but the call graph and state variable map significantly enhance invariant synthesis (Step 2g) and attack surface identification (Step 2e).
+
+**6. Call-graph profiling** (foreground, if Slither succeeded):
+
+For each external/public function in scope, extract its inter-procedural context using the Slither call graph:
+- **Callers** (1 hop): which functions call this one?
+- **Callees** (1 hop): which functions does this one call?
+- **Shared state**: which storage variables does this function share with its callers/callees?
+
+Store as structured JSON at `x-ray/call-graph-profile.json`:
+```json
+{
+  "Contract.function": {
+    "callers": ["Contract2.func1", "Contract3.func2"],
+    "callees": ["Library.helper", "External.call"],
+    "reads": ["storageVar1", "storageVar2"],
+    "writes": ["storageVar1"],
+    "shared_state_with_callers": ["storageVar1"]
+  }
+}
+```
+
+This profile feeds Step 2g (invariant synthesis) — it identifies which functions share state and must maintain coupled invariants. It also feeds Step 2e (attack surfaces) — functions with high callee fan-out or shared state with multiple callers are higher-risk.
 
 **4. Spec/whitepaper detection** (1 Glob: `**/{whitepaper,spec,design,protocol,architecture,overview,README}*.{pdf,md}` excluding `node_modules/`, `lib/`, `x-ray/`, `test/`). Skip user-facing docs (tutorials, API refs, changelogs, contribution guides). Then apply size-aware handling:
 
@@ -96,7 +131,7 @@ The JSON has 7 sections: `repo_shape`, `fix_candidates`, `dangerous_area_changes
 
 For both paths, extract only: doc-stated global invariants, actor definitions, cross-system flows, trust assumptions, economic properties, key design decisions. Tag all spec-derived claims in the report with `(per spec)` so auditors know what is code-verified vs spec-stated. Doc-stated global invariants feed Step 2g's NatSpec routing step — they route to §2 / §3 / §4 of `invariants.md` by shape, NOT to §1 (Enforced Guards).
 
-ALL calls (coverage, git analysis, reference reads, spec glob) MUST appear in the same message. Proceed to Step 2 without waiting for forge coverage.
+ALL calls (coverage, git analysis, reference reads, spec glob, static analysis pre-pass, call-graph profiling) MUST appear in the same message. Proceed to Step 2 without waiting for forge coverage.
 
 ## Step 2: Read Source Files + Entry Point Scan (SINGLE message, ALL tool calls parallel)
 

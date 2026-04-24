@@ -89,9 +89,27 @@ _Vulnerability trails with concrete code smells where the full exploit path coul
 
 ---
 
+## Proof of Concept Tests
+
+_Foundry tests demonstrating confirmed vulnerabilities. Run with `forge test --match-path test/poc/`._
+
+### PoC-1: <Finding Title>
+
+**Finding:** #N — Confidence: [XX]
+**Status:** ✅ PROVEN / ⚠️ INCONCLUSIVE
+
+```solidity
+// Full PoC test code
+```
+
+**Run:** `forge test --match-test test_<name> -vvv`
+**Result:** <What the test demonstrates>
+
+---
+
 > ⚠️ This review was performed by an AI assistant. AI analysis can never verify the complete absence of vulnerabilities and no guarantee of security is given. Team security reviews, bug bounty programs, and on-chain monitoring are strongly recommended. For a consultation regarding your projects' security, visit [https://www.pashov.com](https://www.pashov.com)
 
 ````
 
-**Rules:** Follow the template above exactly. Sort findings by confidence (highest first). Findings below the threshold get a description but no **Fix** block. Draft findings directly in report format — do not re-generate.
+**Rules:** Follow the template above exactly. Sort findings by confidence (highest first). Findings below the threshold get a description but no **Fix** block. Draft findings directly in report format — do not re-generate. Include the PoC section only when `--poc` flag is used or auto-enabled.
 
