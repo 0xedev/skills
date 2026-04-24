@@ -391,6 +391,7 @@ def main():
         # GRPO-specific settings
         beta=0.0,                    # No KL divergence penalty (per recent best practices)
         scale_rewards=True,          # Normalize rewards by std
+        reward_weights=[0.7, 0.3],   # Primary: exploit verification, Secondary: format
 
         # Training settings
         gradient_checkpointing=True,
@@ -418,7 +419,6 @@ def main():
         model=args.model_name,
         args=training_args,
         reward_funcs=[security_audit_reward, format_reward],
-        reward_weights=[0.7, 0.3],  # Primary: exploit verification, Secondary: format
         train_dataset=dataset,
     )
 
